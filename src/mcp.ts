@@ -2,7 +2,19 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { api } from "./api.ts";
 
-const TIMEZONE = process.env.TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+function resolveTimezone(): string {
+  const tz = process.env.TIMEZONE?.trim();
+  if (!tz) return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    console.warn(`TIMEZONE "${tz}" is not a valid IANA time zone (e.g. America/New_York); using UTC`);
+    return "UTC";
+  }
+}
+
+const TIMEZONE = resolveTimezone();
 
 const INSTRUCTIONS = `
 This server logs meals to the user's personal meal tracker. You are the nutrition estimator:
