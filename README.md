@@ -25,15 +25,51 @@ cp .env.example .env
 
 | Variable | |
 | --- | --- |
-| `MEAL_API_URL` | Your Netlify site URL |
+| `MEAL_API_URL` | Your Netlify site URL, e.g. `https://scw-meal-tracker.netlify.app` |
 | `MEAL_API_TOKEN` | Same value as the site's `MEAL_API_TOKEN` env var |
-| `MCP_AUTH_TOKEN` | Optional. If set, clients must send `Authorization: Bearer <token>` |
+| `MCP_AUTH_TOKEN` | Secret protecting this server, from `openssl rand -hex 32`. Strongly recommended, and required if the server is reachable from the internet |
 | `TIMEZONE` | IANA zone used for the default date and time, e.g. `America/New_York` |
 | `PORT` | Default `3030` |
+| `TUNNEL_TOKEN` | Only for the Cloudflare Tunnel setup below |
 
-## Run
+With `MCP_AUTH_TOKEN` set, clients connect in one of two ways:
+- `/mcp/<MCP_AUTH_TOKEN>`: the token goes in the URL. Use this for the Claude apps, whose custom connectors only take a URL.
+- `/mcp` with an `Authorization: Bearer <MCP_AUTH_TOKEN>` header.
 
-With Docker (recommended for a home server):
+## Deploy on a home server with Cloudflare Tunnel
+
+This gives you a public HTTPS URL without opening router ports, so Claude on your phone and claude.ai can reach the server.
+
+1. **Get the code and configure it** on the server:
+   ```bash
+   git clone https://github.com/scwambach/meal-tracker-mcp.git && cd meal-tracker-mcp && cp .env.example .env
+   ```
+   Fill in `MEAL_API_URL`, `MEAL_API_TOKEN`, `MCP_AUTH_TOKEN` and `TIMEZONE`.
+
+2. **Create the tunnel** in the Cloudflare dashboard. You need a domain on Cloudflare.
+   - Go to Zero Trust → Networks → Tunnels → Create a tunnel → **Cloudflared**, and name it e.g. `meal-tracker`.
+   - On the install step, copy the token from the shown command (the long string after `--token`) into `TUNNEL_TOKEN` in `.env`. You don't need to run the command.
+   - Add a public hostname, e.g. `meals-mcp.yourdomain.com`, with service type **HTTP** and URL **`meal-tracker-mcp:3030`**.
+
+3. **Start it:**
+   ```bash
+   docker compose --profile tunnel up -d --build
+   ```
+   Check it with `curl https://meals-mcp.yourdomain.com/health`, which should print `ok`.
+
+4. **Connect Claude:** on claude.ai, go to Settings → Connectors → **Add custom connector** and enter:
+   ```
+   https://meals-mcp.yourdomain.com/mcp/<MCP_AUTH_TOKEN>
+   ```
+   Connectors added on claude.ai are also available in the Claude mobile apps.
+
+**Updating:** `git pull && docker compose --profile tunnel up -d --build`
+
+**Logs:** `docker compose logs -f meal-tracker-mcp`
+
+## Other ways to run
+
+Without the tunnel (home network only):
 
 ```bash
 docker compose up -d --build
@@ -46,17 +82,13 @@ npm install
 node --env-file=.env src/http.ts
 ```
 
-The MCP endpoint is `http://<host>:3030/mcp`, and the health check is `/health`.
-
-## Connect Claude
-
-**Claude Desktop / Claude Code on your network.** Add it as a remote HTTP server:
+**Claude Code / Claude Desktop on your network:**
 
 ```bash
 claude mcp add --transport http meal-tracker http://<host>:3030/mcp --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
 ```
 
-**Claude Desktop over stdio** (runs locally, so no server is needed). Add to `claude_desktop_config.json`:
+**Claude Desktop over stdio** (runs locally, no server needed). Add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -68,5 +100,3 @@ claude mcp add --transport http meal-tracker http://<host>:3030/mcp --header "Au
   }
 }
 ```
-
-**Claude on your phone or claude.ai.** Custom connectors are reached from Anthropic's servers, so the endpoint must be reachable over public HTTPS, e.g. through a Cloudflare Tunnel or Tailscale Funnel to port 3030. Add it under Settings → Connectors → Add custom connector. Custom connectors there can't send a static bearer header, so leave `MCP_AUTH_TOKEN` unset and protect the tunnel instead (e.g. Cloudflare Access). Otherwise anyone who finds the URL can write to your log.

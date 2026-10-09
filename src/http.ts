@@ -6,11 +6,19 @@ import { createServer } from "./mcp.ts";
 const PORT = Number(process.env.PORT ?? 3030);
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
-function authorized(req: IncomingMessage): boolean {
-  if (!AUTH_TOKEN) return true;
-  const given = Buffer.from(req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "");
-  const expected = Buffer.from(AUTH_TOKEN);
-  return given.length === expected.length && timingSafeEqual(given, expected);
+function matches(given: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(AUTH_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// With MCP_AUTH_TOKEN set, a client proves itself either with an "Authorization: Bearer" header
+// on /mcp, or by putting the token in the path (/mcp/<token>) for clients like the Claude apps
+// whose custom connectors can only be given a URL.
+function authorized(req: IncomingMessage, path: string): boolean {
+  if (!AUTH_TOKEN) return path === "/mcp";
+  if (path === "/mcp") return matches(req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "");
+  return path.startsWith("/mcp/") && matches(path.slice("/mcp/".length));
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -27,11 +35,11 @@ const http = createHttpServer(async (req, res) => {
     res.writeHead(200, { "content-type": "text/plain" }).end("ok");
     return;
   }
-  if (path !== "/mcp") {
+  if (path !== "/mcp" && !path.startsWith("/mcp/")) {
     res.writeHead(404).end();
     return;
   }
-  if (!authorized(req)) {
+  if (!authorized(req, path)) {
     res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
     return;
   }
@@ -62,5 +70,7 @@ const http = createHttpServer(async (req, res) => {
 });
 
 http.listen(PORT, () => {
-  console.log(`meal-tracker MCP listening on http://0.0.0.0:${PORT}/mcp${AUTH_TOKEN ? " (bearer auth on)" : ""}`);
+  console.log(`meal-tracker MCP listening on port ${PORT}`);
+  if (AUTH_TOKEN) console.log("Auth on: use /mcp with a Bearer token, or /mcp/<MCP_AUTH_TOKEN>");
+  else console.warn("MCP_AUTH_TOKEN is not set: anyone who can reach /mcp can change your meal log");
 });
