@@ -53,7 +53,7 @@ This gives you a public HTTPS URL without opening router ports, so Claude on you
 
 3. **Start it:**
    ```bash
-   docker compose --profile tunnel up -d --build
+   docker compose --profile tunnel up -d
    ```
    Check it with `curl https://meals-mcp.yourdomain.com/health`, which should print `ok`.
 
@@ -63,7 +63,7 @@ This gives you a public HTTPS URL without opening router ports, so Claude on you
    ```
    Connectors added on claude.ai are also available in the Claude mobile apps.
 
-**Updating:** `git pull && docker compose --profile tunnel up -d --build`
+**Updating:** every push to `main` publishes a new image to `ghcr.io/scwambach/meal-tracker-mcp:latest` (amd64 and arm64). To update, run `docker compose --profile tunnel pull && docker compose --profile tunnel up -d`. On a NAS Docker app, use its pull/redeploy button.
 
 **Logs:** `docker compose logs -f meal-tracker-mcp`
 

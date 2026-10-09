@@ -1,5 +1,6 @@
 services:
   meal-tracker-mcp:
+    image: ghcr.io/scwambach/meal-tracker-mcp:latest
     build: .
     restart: unless-stopped
     env_file: .env
