@@ -1,9 +1,18 @@
-FROM node:24-alpine
+# Base images come from AWS's mirror of Docker Hub's official images to avoid Docker Hub pull limits.
+
+# Dependencies are pure JavaScript, so install them once on the build machine's own
+# architecture and copy them into each target image (no emulation needed for arm64).
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY src ./src
+
+FROM public.ecr.aws/docker/library/node:24-alpine
+WORKDIR /app
 ENV NODE_ENV=production PORT=3030
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY src ./src
 EXPOSE 3030
 USER node
 CMD ["node", "src/http.ts"]
