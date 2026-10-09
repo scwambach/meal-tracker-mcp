@@ -1,0 +1,23 @@
+{
+  "name": "meal-tracker-mcp",
+  "version": "1.0.0",
+  "description": "Self-hosted MCP server that lets Claude log meal estimates to meal-tracker",
+  "scripts": {
+    "start": "node src/http.ts",
+    "stdio": "node src/stdio.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  }
+}

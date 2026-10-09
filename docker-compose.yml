@@ -1,0 +1,7 @@
+services:
+  meal-tracker-mcp:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3030:3030"
