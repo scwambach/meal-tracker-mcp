@@ -17,8 +17,10 @@ function resolveTimezone(): string {
 const TIMEZONE = resolveTimezone();
 
 const INSTRUCTIONS = `
-This server logs meals to the user's personal meal tracker. You are the nutrition estimator:
-there is no food database. When the user shares a photo or description of food:
+This server logs meals and workouts to the user's personal tracker. You are the estimator:
+there is no food or exercise database.
+
+MEALS: when the user shares a photo or description of food:
 
 1. Identify each distinct food and drink, estimate its portion (grams, cups, pieces, etc.),
    and estimate calories, protein, carbs, fat (and fiber when meaningful) from your own knowledge.
@@ -30,6 +32,16 @@ there is no food database. When the user shares a photo or description of food:
    "assumptions" and set "confidence" honestly.
 4. After logging, briefly tell the user the estimated totals and how many calories they have
    left today and this week (log_meal returns this when goals are set).
+
+WORKOUTS: when the user tells you about exercise they did:
+
+1. Call get_my_stats for their sex, age, height and weight, and base the calorie burn on those
+   (e.g. MET value for the activity and intensity × body weight × duration).
+2. If the activity, duration or intensity is unclear, ask first (e.g. how long, how hard,
+   distance or pace, weights vs. circuits). Batch questions in one message.
+3. Call log_workout, recording assumptions and an honest confidence.
+4. Burned calories are for reference only. They do NOT add to the user's food allowance, so
+   never tell the user they "earned" extra calories or can eat more because of a workout.
 
 Photos are only for your analysis; never try to store or upload them.
 `.trim();
@@ -68,6 +80,47 @@ const mealFields = {
   notes: z.string().optional(),
 };
 
+const workoutFields = {
+  title: z.string().describe("Short name, e.g. 'Morning run' or 'Upper body lifting'"),
+  type: z.enum(["run", "walk", "hike", "cycle", "swim", "strength", "hiit", "yoga", "sports", "cardio", "other"]),
+  duration_min: z.number().positive().describe("Duration in minutes"),
+  intensity: z.enum(["light", "moderate", "hard"]),
+  calories_burned: num.describe("Your estimate of calories burned, based on the user's stats from get_my_stats"),
+  distance: z.string().optional().describe("If relevant, e.g. '3.1 mi' or '5 km'"),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe(`Local date, YYYY-MM-DD. Defaults to today (${TIMEZONE}).`),
+  time: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .optional()
+    .describe("Local start time, 24h HH:MM, if known"),
+  confidence: z.enum(["low", "medium", "high"]).describe("How confident the estimate is"),
+  assumptions: z
+    .array(z.string())
+    .optional()
+    .describe("Assumptions behind the estimate, e.g. 'Assumed ~10 min/mile pace'"),
+  notes: z.string().optional(),
+};
+
+type Workout = {
+  id: string;
+  date: string;
+  time?: string;
+  title: string;
+  type: string;
+  duration_min: number;
+  intensity: string;
+  calories_burned: number;
+  distance?: string;
+};
+
+const summarizeWorkout = (w: Workout) =>
+  `${w.title} (${w.type}, ${w.date}${w.time ? " " + w.time : ""}) — ${w.duration_min} min, ${w.intensity}` +
+  `${w.distance ? `, ${w.distance}` : ""}, ~${w.calories_burned} kcal burned [id ${w.id}]`;
+
 type Totals = { calories: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number };
 type Meal = { id: string; date: string; time?: string; title: string; meal_type: string; totals: Totals };
 
@@ -93,7 +146,15 @@ const text = (value: unknown) => ({
 });
 
 type Targets = { daily_calories: number; weekly_calories: number; protein_g: number; carbs_g: number; fat_g: number };
-type ProfileResponse = { profile: { week_start?: "monday" | "sunday" } | null; targets: Targets | null };
+type Profile = {
+  sex: string;
+  age: number;
+  height_cm: number;
+  weight_kg: number;
+  activity: string;
+  week_start?: "monday" | "sunday";
+};
+type ProfileResponse = { profile: Profile | null; targets: (Targets & { bmr: number }) | null };
 
 const shiftDay = (date: string, by: number) =>
   new Date(Date.parse(date + "T12:00:00Z") + by * 86400000).toISOString().slice(0, 10);
@@ -126,7 +187,7 @@ const summarize = (m: Meal) =>
   `P ${m.totals.protein_g}g · C ${m.totals.carbs_g}g · F ${m.totals.fat_g}g [id ${m.id}]`;
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "meal-tracker", version: "1.0.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "meal-tracker", version: "1.1.0" }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
     "log_meal",
@@ -239,6 +300,124 @@ export function createServer(): McpServer {
     async ({ id }) => {
       await api("DELETE", `/meals/${encodeURIComponent(id)}`);
       return text(`Deleted meal ${id}.`);
+    },
+  );
+
+  server.registerTool(
+    "get_my_stats",
+    {
+      title: "Get my stats",
+      description:
+        "The user's sex, age, height, weight and activity level from their Goals. Call this before " +
+        "estimating calories burned by a workout.",
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const { profile, targets } = await api<ProfileResponse>("GET", "/profile");
+      if (!profile) {
+        return text(
+          "No stats saved yet. Ask the user for their weight (and ideally sex, age and height), or suggest " +
+            "they fill in the website's Goals tab.",
+        );
+      }
+      const inches = Math.round(profile.height_cm / 2.54);
+      return text(
+        [
+          `Sex: ${profile.sex}`,
+          `Age: ${profile.age}`,
+          `Height: ${profile.height_cm} cm (${Math.floor(inches / 12)}'${inches % 12}")`,
+          `Weight: ${profile.weight_kg} kg (${Math.round(profile.weight_kg / 0.45359237)} lb)`,
+          `Everyday activity level: ${profile.activity}`,
+          targets ? `Resting burn (BMR): ~${targets.bmr} kcal/day` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    },
+  );
+
+  server.registerTool(
+    "log_workout",
+    {
+      title: "Log workout",
+      description:
+        "Save a workout with your estimate of calories burned, based on the user's stats (call " +
+        "get_my_stats first). Ask about duration or intensity first if they're unclear. This is for " +
+        "reference only and does not change the user's calorie goals.",
+      inputSchema: workoutFields,
+    },
+    async (input) => {
+      const workout = await api<Workout>("POST", "/workouts", {
+        ...input,
+        date: input.date ?? nowLocal().date,
+        assumptions: input.assumptions ?? [],
+      });
+      return text(
+        `Logged: ${summarizeWorkout(workout)}\n\nReminder: burned calories don't change the user's food goals.`,
+      );
+    },
+  );
+
+  server.registerTool(
+    "list_workouts",
+    {
+      title: "List workouts",
+      description:
+        "List logged workouts with calories burned per day. Use for 'what workouts did I do this week', " +
+        "and to find a workout id before updating or deleting.",
+      inputSchema: {
+        from: z.string().optional().describe("Start date YYYY-MM-DD (inclusive). Defaults to 6 days ago."),
+        to: z.string().optional().describe("End date YYYY-MM-DD (inclusive). Defaults to today."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ from, to }) => {
+      const today = nowLocal().date;
+      const start = from ?? shiftDay(today, -6);
+      const end = to ?? today;
+      const { workouts } = await api<{ workouts: Workout[] }>(
+        "GET",
+        `/workouts?from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`,
+      );
+      if (!workouts.length) return text(`No workouts logged between ${start} and ${end}.`);
+
+      const days = new Map<string, Workout[]>();
+      for (const w of workouts) days.set(w.date, [...(days.get(w.date) ?? []), w]);
+      const total = workouts.reduce((a, w) => a + w.calories_burned, 0);
+      const out = [...days].map(([date, ws]) =>
+        [
+          `${date}: ~${ws.reduce((a, w) => a + w.calories_burned, 0)} kcal burned`,
+          ...ws.map((w) => `  - ${summarizeWorkout(w)}`),
+        ].join("\n"),
+      );
+      return text(`${out.join("\n\n")}\n\nTotal ${start} to ${end}: ~${total} kcal burned.`);
+    },
+  );
+
+  server.registerTool(
+    "update_workout",
+    {
+      title: "Update workout",
+      description: "Correct a logged workout (e.g. it was longer, or harder). Pass only the fields to change.",
+      inputSchema: { id: z.string(), ...z.object(workoutFields).partial().shape },
+    },
+    async ({ id, ...patch }) => {
+      const workout = await api<Workout>("PATCH", `/workouts/${encodeURIComponent(id)}`, patch);
+      return text(`Updated: ${summarizeWorkout(workout)}`);
+    },
+  );
+
+  server.registerTool(
+    "delete_workout",
+    {
+      title: "Delete workout",
+      description: "Delete a logged workout. Confirm with the user first unless they clearly asked.",
+      inputSchema: { id: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    async ({ id }) => {
+      await api("DELETE", `/workouts/${encodeURIComponent(id)}`);
+      return text(`Deleted workout ${id}.`);
     },
   );
 

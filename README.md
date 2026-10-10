@@ -2,7 +2,7 @@
 
 A self-hosted MCP server that lets Claude log meals to [meal-tracker](https://github.com/scwambach/meal-tracker).
 
-Send Claude a photo of what you ate. Claude identifies the foods, estimates portions, calories and macros from its own knowledge (no food database), and asks clarifying questions when something is ambiguous, like the cooking oil, a sauce, the portion size, or what's in a drink. Then it logs the meal. The photo stays in your Claude conversation and is never sent to this server.
+Send Claude a photo of what you ate, or tell it what workout you did. Claude identifies the foods, estimates portions, calories and macros from its own knowledge (no food database), and asks clarifying questions when something is ambiguous, like the cooking oil, a sauce, the portion size, or what's in a drink. Then it logs the meal. The photo stays in your Claude conversation and is never sent to this server.
 
 ## Tools
 
@@ -14,6 +14,11 @@ Send Claude a photo of what you ate. Claude identifies the foods, estimates port
 | `get_meal` | Full detail for one meal |
 | `update_meal` | Correct a meal ("it was actually two tortillas") |
 | `delete_meal` | Remove a meal |
+| `get_my_stats` | Your sex, age, height and weight from the Goals tab, so Claude can estimate workout burn |
+| `log_workout` | Save a workout with Claude's estimate of calories burned (reference only; doesn't change food goals) |
+| `list_workouts` | Workouts and calories burned per day for a date range |
+| `update_workout` | Correct a workout |
+| `delete_workout` | Remove a workout |
 
 There's also a `log_meal_from_photo` prompt. The server's instructions tell Claude to ask before logging whenever it's unsure about something that would change the estimate.
 
