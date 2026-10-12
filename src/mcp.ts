@@ -17,7 +17,7 @@ function resolveTimezone(): string {
 const TIMEZONE = resolveTimezone();
 
 const INSTRUCTIONS = `
-This server logs meals and workouts to the user's personal tracker. You are the estimator:
+This server logs meals, workouts and weigh-ins to the user's personal tracker. You are the estimator:
 there is no food or exercise database.
 
 MEALS: when the user shares a photo or description of food:
@@ -42,6 +42,10 @@ WORKOUTS: when the user tells you about exercise they did:
 3. Call log_workout, recording assumptions and an honest confidence.
 4. Burned calories are for reference only. They do NOT add to the user's food allowance, so
    never tell the user they "earned" extra calories or can eat more because of a workout.
+
+WEIGHT: when the user tells you their weight, call log_weight with the number exactly as
+given (decimals are fine) and its unit. Their latest weigh-in automatically updates the weight
+used for their calorie targets.
 
 Photos are only for your analysis; never try to store or upload them.
 `.trim();
@@ -117,6 +121,12 @@ type Workout = {
   distance?: string;
 };
 
+type Weight = { id: string; date: string; time?: string; weight_kg: number; note?: string };
+
+const KG_PER_LB = 0.45359237;
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const fmtWeight = (kg: number) => `${round1(kg / KG_PER_LB)} lb (${round1(kg)} kg)`;
+
 const summarizeWorkout = (w: Workout) =>
   `${w.title} (${w.type}, ${w.date}${w.time ? " " + w.time : ""}) — ${w.duration_min} min, ${w.intensity}` +
   `${w.distance ? `, ${w.distance}` : ""}, ~${w.calories_burned} kcal burned [id ${w.id}]`;
@@ -187,7 +197,7 @@ const summarize = (m: Meal) =>
   `P ${m.totals.protein_g}g · C ${m.totals.carbs_g}g · F ${m.totals.fat_g}g [id ${m.id}]`;
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "meal-tracker", version: "1.1.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "meal-tracker", version: "1.2.0" }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
     "log_meal",
@@ -326,7 +336,7 @@ export function createServer(): McpServer {
           `Sex: ${profile.sex}`,
           `Age: ${profile.age}`,
           `Height: ${profile.height_cm} cm (${Math.floor(inches / 12)}'${inches % 12}")`,
-          `Weight: ${profile.weight_kg} kg (${Math.round(profile.weight_kg / 0.45359237)} lb)`,
+          `Weight: ${round1(profile.weight_kg)} kg (${round1(profile.weight_kg / KG_PER_LB)} lb)`,
           `Everyday activity level: ${profile.activity}`,
           targets ? `Resting burn (BMR): ~${targets.bmr} kcal/day` : "",
         ]
@@ -418,6 +428,89 @@ export function createServer(): McpServer {
     async ({ id }) => {
       await api("DELETE", `/workouts/${encodeURIComponent(id)}`);
       return text(`Deleted workout ${id}.`);
+    },
+  );
+
+  server.registerTool(
+    "log_weight",
+    {
+      title: "Log weight",
+      description:
+        "Record a weigh-in. Pass the weight exactly as the user said it (decimals allowed) with its unit. " +
+        "The latest weigh-in also updates the weight used for their calorie targets.",
+      inputSchema: {
+        weight: z.number().positive().describe("e.g. 207.4"),
+        unit: z.enum(["lb", "kg"]),
+        date: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional()
+          .describe(`Local date, YYYY-MM-DD. Defaults to today (${TIMEZONE}).`),
+        note: z.string().optional().describe("Optional, e.g. 'morning, before breakfast'"),
+      },
+    },
+    async ({ weight, unit, date, note }) => {
+      const now = nowLocal();
+      const day = date ?? now.date;
+      const { weights: before } = await api<{ weights: Weight[] }>("GET", "/weights");
+      const w = await api<Weight>("POST", "/weights", {
+        date: day,
+        ...(day === now.date && { time: now.time }),
+        weight_kg: unit === "kg" ? weight : weight * KG_PER_LB,
+        ...(note && { note }),
+      });
+      const prev = before.find((b) => b.date <= day && b.id !== w.id);
+      const change = prev
+        ? `Change since ${prev.date}: ${w.weight_kg - prev.weight_kg > 0 ? "+" : ""}${round1((w.weight_kg - prev.weight_kg) / KG_PER_LB)} lb.`
+        : "This is the first weigh-in.";
+      return text(`Logged ${fmtWeight(w.weight_kg)} on ${w.date} [id ${w.id}]. ${change}`);
+    },
+  );
+
+  server.registerTool(
+    "list_weights",
+    {
+      title: "List weigh-ins",
+      description: "Weigh-ins over a date range, newest first, with the overall change. Use for weight trend questions.",
+      inputSchema: {
+        from: z.string().optional().describe("Start date YYYY-MM-DD (inclusive). Defaults to 90 days ago."),
+        to: z.string().optional().describe("End date YYYY-MM-DD (inclusive). Defaults to today."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ from, to }) => {
+      const today = nowLocal().date;
+      const start = from ?? shiftDay(today, -90);
+      const end = to ?? today;
+      const { weights } = await api<{ weights: Weight[] }>(
+        "GET",
+        `/weights?from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`,
+      );
+      if (!weights.length) return text(`No weigh-ins between ${start} and ${end}.`);
+      const newest = weights[0];
+      const oldest = weights.at(-1)!;
+      const diff = round1((newest.weight_kg - oldest.weight_kg) / KG_PER_LB);
+      return text(
+        [
+          ...weights.map((w) => `- ${w.date}${w.time ? " " + w.time : ""}: ${fmtWeight(w.weight_kg)}${w.note ? ` (${w.note})` : ""} [id ${w.id}]`),
+          "",
+          weights.length > 1 ? `Change ${oldest.date} to ${newest.date}: ${diff > 0 ? "+" : ""}${diff} lb.` : "",
+        ].join("\n"),
+      );
+    },
+  );
+
+  server.registerTool(
+    "delete_weight",
+    {
+      title: "Delete weigh-in",
+      description: "Delete a weigh-in (e.g. a typo). Confirm with the user first unless they clearly asked.",
+      inputSchema: { id: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    async ({ id }) => {
+      await api("DELETE", `/weights/${encodeURIComponent(id)}`);
+      return text(`Deleted weigh-in ${id}.`);
     },
   );
 

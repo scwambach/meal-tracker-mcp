@@ -19,6 +19,9 @@ Send Claude a photo of what you ate, or tell it what workout you did. Claude ide
 | `list_workouts` | Workouts and calories burned per day for a date range |
 | `update_workout` | Correct a workout |
 | `delete_workout` | Remove a workout |
+| `log_weight` | Record a weigh-in (decimals allowed, lb or kg); also updates the weight your targets use |
+| `list_weights` | Weigh-ins and overall change for a date range |
+| `delete_weight` | Remove a weigh-in |
 
 There's also a `log_meal_from_photo` prompt. The server's instructions tell Claude to ask before logging whenever it's unsure about something that would change the estimate.
 
