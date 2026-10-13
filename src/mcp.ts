@@ -40,8 +40,9 @@ WORKOUTS: when the user tells you about exercise they did:
 2. If the activity, duration or intensity is unclear, ask first (e.g. how long, how hard,
    distance or pace, weights vs. circuits). Batch questions in one message.
 3. Call log_workout, recording assumptions and an honest confidence.
-4. Burned calories are for reference only. They do NOT add to the user's food allowance, so
-   never tell the user they "earned" extra calories or can eat more because of a workout.
+4. A quarter (25%) of burned calories is added to that week's calorie allotment; the daily goal
+   does not change. log_workout returns the updated weekly numbers. Burn estimates run high, so
+   never suggest eating back more than that 25%.
 
 WEIGHT: when the user tells you their weight, call log_weight with the number exactly as
 given (decimals are fine) and its unit. Their latest weigh-in automatically updates the weight
@@ -166,6 +167,9 @@ type Profile = {
 };
 type ProfileResponse = { profile: Profile | null; targets: (Targets & { bmr: number }) | null };
 
+// Share of workout burn added back to the weekly allotment; must match EAT_BACK in the web app.
+const EAT_BACK = 0.25;
+
 const shiftDay = (date: string, by: number) =>
   new Date(Date.parse(date + "T12:00:00Z") + by * 86400000).toISOString().slice(0, 10);
 
@@ -177,18 +181,34 @@ async function progress(date: string): Promise<string> {
   const startDow = profile?.week_start === "sunday" ? 0 : 1;
   const weekStart = shiftDay(date, -((new Date(date + "T12:00:00Z").getUTCDay() - startDow + 7) % 7));
   const weekEnd = shiftDay(weekStart, 6);
-  const { meals } = await api<{ meals: Meal[] }>("GET", `/meals?from=${weekStart}&to=${weekEnd}`);
+  const [{ meals }, { workouts }] = await Promise.all([
+    api<{ meals: Meal[] }>("GET", `/meals?from=${weekStart}&to=${weekEnd}`),
+    api<{ workouts: Workout[] }>("GET", `/workouts?from=${weekStart}&to=${weekEnd}`),
+  ]);
 
   const sum = (list: Meal[], k: keyof Totals) => Math.round(list.reduce((a, m) => a + m.totals[k], 0));
   const day = meals.filter((m) => m.date === date);
   const left = (goal: number, eaten: number) =>
     goal - eaten >= 0 ? `${goal - eaten} left` : `${eaten - goal} over`;
 
+  // Workouts up to and including this day add a share of their burn to the week.
+  const burned = workouts.filter((w) => w.date <= date).reduce((a, w) => a + w.calories_burned, 0);
+  const earned = Math.round(burned * EAT_BACK);
+  const weekGoal = targets.weekly_calories + earned;
+  // The day's budget if the rest of the week (this day included) is to land on the weekly allotment.
+  const remainingDays = Math.round((Date.parse(weekEnd) - Date.parse(date)) / 86400000) + 1;
+  const eatenBefore = sum(meals.filter((m) => m.date < date), "calories");
+  const adjusted = Math.max(0, Math.round((weekGoal - eatenBefore) / remainingDays));
+  const dayEaten = sum(day, "calories");
+
   return [
     `Day ${date}: ${sum(day, "calories")} of ${targets.daily_calories} kcal eaten (${left(targets.daily_calories, sum(day, "calories"))}). ` +
       `Protein ${sum(day, "protein_g")}/${targets.protein_g}g, carbs ${sum(day, "carbs_g")}/${targets.carbs_g}g, fat ${sum(day, "fat_g")}/${targets.fat_g}g.`,
-    `Week ${weekStart} to ${weekEnd}: ${sum(meals, "calories")} of ${targets.weekly_calories} kcal eaten ` +
-      `(${left(targets.weekly_calories, sum(meals, "calories"))}).`,
+    `Adjusted budget for ${date} (weekly allotment spread over the ${remainingDays} day${remainingDays === 1 ? "" : "s"} left): ` +
+      `${adjusted} kcal (${left(adjusted, dayEaten)}).`,
+    `Week ${weekStart} to ${weekEnd}: ${sum(meals, "calories")} of ${weekGoal} kcal eaten ` +
+      `(${left(weekGoal, sum(meals, "calories"))})` +
+      (earned ? `; allotment includes +${earned} kcal from workouts (25% of ~${burned} burned).` : "."),
   ].join("\n");
 }
 
@@ -197,7 +217,7 @@ const summarize = (m: Meal) =>
   `P ${m.totals.protein_g}g · C ${m.totals.carbs_g}g · F ${m.totals.fat_g}g [id ${m.id}]`;
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "meal-tracker", version: "1.2.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "meal-tracker", version: "1.3.0" }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
     "log_meal",
@@ -352,8 +372,8 @@ export function createServer(): McpServer {
       title: "Log workout",
       description:
         "Save a workout with your estimate of calories burned, based on the user's stats (call " +
-        "get_my_stats first). Ask about duration or intensity first if they're unclear. This is for " +
-        "reference only and does not change the user's calorie goals.",
+        "get_my_stats first). Ask about duration or intensity first if they're unclear. 25% of the burn " +
+        "is added to that week's calorie allotment; the daily goal doesn't change.",
       inputSchema: workoutFields,
     },
     async (input) => {
@@ -363,7 +383,7 @@ export function createServer(): McpServer {
         assumptions: input.assumptions ?? [],
       });
       return text(
-        `Logged: ${summarizeWorkout(workout)}\n\nReminder: burned calories don't change the user's food goals.`,
+        `Logged: ${summarizeWorkout(workout)}\n\n${await progress(workout.date)}`,
       );
     },
   );

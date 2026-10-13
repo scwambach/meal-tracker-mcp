@@ -15,7 +15,7 @@ Send Claude a photo of what you ate, or tell it what workout you did. Claude ide
 | `update_meal` | Correct a meal ("it was actually two tortillas") |
 | `delete_meal` | Remove a meal |
 | `get_my_stats` | Your sex, age, height and weight from the Goals tab, so Claude can estimate workout burn |
-| `log_workout` | Save a workout with Claude's estimate of calories burned (reference only; doesn't change food goals) |
+| `log_workout` | Save a workout with Claude's estimate of calories burned; 25% of it is added to that week's calorie allotment, and it reports the updated numbers |
 | `list_workouts` | Workouts and calories burned per day for a date range |
 | `update_workout` | Correct a workout |
 | `delete_workout` | Remove a workout |
